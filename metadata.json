@@ -1,0 +1,9 @@
+{
+  "name": "GEM Y - i Friendship Full learning",
+  "description": "An AI-powered executive assistant for General Managers and Gen Y, providing strategic analysis, translation, and daily social briefings.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}
