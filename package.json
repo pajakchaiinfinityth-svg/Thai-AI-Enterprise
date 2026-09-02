@@ -1,15 +1,29 @@
 {
-  "name": "react-example",
+  "name": "thai-ai-for-citizens",
+  "version": "1.0.0",
+  "description": "A human-centered AI application that helps Thai citizens navigate public information, understand services, and take action together with intelligent assistance - powered by WebMCP",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "start": "node server.js"
   },
+  "keywords": [
+    "webmcp",
+    "ai-for-citizens",
+    "thai-government-services",
+    "public-information",
+    "human-centered-ai",
+    "chatbot",
+    "gemini-api",
+    "accessibility"
+  ],
+  "author": "Pakchaiing <https://github.com/pajakchaiinfinityth-svg>",
+  "license": "MIT",
   "dependencies": {
     "@google/genai": "^1.29.0",
     "@tailwindcss/typography": "^0.5.19",
@@ -35,5 +49,17 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pajakchaiinfinityth-svg/Thai-AI-for-Citizens.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pajakchaiinfinityth-svg/Thai-AI-for-Citizens/issues"
+  },
+  "homepage": "https://thai-ai-for-citizens.vercel.app"
 }
