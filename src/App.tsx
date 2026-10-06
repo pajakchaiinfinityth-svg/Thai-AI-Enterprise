@@ -16,21 +16,22 @@ import ReactCrop, { type Crop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { AssessmentLab } from './components/AssessmentLab';
 import { StrategyOS } from './components/StrategyOS';
+import { PWAInstallButton, OfflineIndicator } from './components/PWAInstallButton';
+import {
+  getAllBriefingsFromIDB,
+  deleteBriefingFromIDB,
+  saveTranslationToIDB,
+  bulkSyncTranslationsToIDB,
+  getAllTranslationsFromIDB,
+  deleteTranslationFromIDB,
+  type CachedBriefingItem,
+} from './utils/offlineStorage';
 
 interface ChatMessage {
   role: 'user' | 'bot' | 'model';
   content: string;
   createdAt?: any;
   userId?: string;
-}
-
-declare global {
-  interface Window {
-    aistudio: {
-      hasSelectedApiKey: () => Promise<boolean>;
-      openSelectKey: () => Promise<void>;
-    };
-  }
 }
 
 const translations = {
@@ -388,29 +389,14 @@ export default function App() {
       }, 'image/jpeg');
     });
   };
-  const [hasApiKey, setHasApiKey] = useState(false);
-
-  useEffect(() => {
-    const checkApiKey = async () => {
-      if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        setHasApiKey(hasKey);
-      }
-    };
-    checkApiKey();
-  }, [activeTab]);
-
-  const openApiKeyDialog = async () => {
-    if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
-      await window.aistudio.openSelectKey();
-      setHasApiKey(true);
-    }
-  };
+  const [hasApiKey, setHasApiKey] = useState(true);
+  const openApiKeyDialog = async () => {};
 
   // Briefing State
   const [briefingResult, setBriefingResult] = useState('');
   const [isProcessingBriefing, setIsProcessingBriefing] = useState(false);
   const [briefingCount, setBriefingCount] = useState(10);
+  const [cachedBriefings, setCachedBriefings] = useState<CachedBriefingItem[]>([]);
   const [savedTranslations, setSavedTranslations] = useState<{
     id: string;
     source: string;
@@ -419,6 +405,22 @@ export default function App() {
     feedback: 'good' | 'bad' | null;
     timestamp: number;
   }[]>([]);
+
+  // Load offline IndexedDB cache on mount
+  useEffect(() => {
+    const loadOfflineCache = async () => {
+      const briefings = await getAllBriefingsFromIDB();
+      setCachedBriefings(briefings);
+      if (briefings.length > 0 && !briefingResult) {
+        setBriefingResult(briefings[0].content);
+      }
+      const translations = await getAllTranslationsFromIDB();
+      if (translations.length > 0) {
+        setSavedTranslations(translations);
+      }
+    };
+    loadOfflineCache();
+  }, []);
 
   const [copied, setCopied] = useState(false);
 
@@ -455,7 +457,7 @@ export default function App() {
     });
 
     const translationsQuery = query(collection(db, `users/${user.uid}/savedTranslations`), orderBy('createdAt', 'desc'));
-    const unsubscribeTranslations = onSnapshot(translationsQuery, (snapshot) => {
+    const unsubscribeTranslations = onSnapshot(translationsQuery, async (snapshot) => {
       const translations: any[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
@@ -464,13 +466,19 @@ export default function App() {
           source: data.input,
           target: data.result,
           direction: data.type === 'en-th' ? 'EN_TH' : 'TH_EN',
-          feedback: null, // Feedback not stored in this schema yet
+          feedback: data.feedback || null,
           timestamp: data.createdAt?.toMillis() || Date.now()
         });
       });
-      setSavedTranslations(translations);
-    }, (error) => {
+      await bulkSyncTranslationsToIDB(translations);
+      const mergedFromIDB = await getAllTranslationsFromIDB();
+      setSavedTranslations(mergedFromIDB.length > 0 ? mergedFromIDB : translations);
+    }, async (error) => {
       console.error("Error fetching translations:", error);
+      const fallback = await getAllTranslationsFromIDB();
+      if (fallback.length > 0) {
+        setSavedTranslations(fallback);
+      }
     });
 
     return () => {
@@ -588,7 +596,23 @@ export default function App() {
   };
 
   const saveTranslation = async (source: string, target: string, direction: 'EN_TH' | 'TH_EN', feedback: 'good' | 'bad' | null = null) => {
-    if (user) {
+    const localEntry = {
+      id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      source,
+      target,
+      direction,
+      feedback,
+      timestamp: Date.now()
+    };
+
+    // Always persist immediately to IndexedDB so Learning Log works offline
+    await saveTranslationToIDB(localEntry);
+    const updatedIDB = await getAllTranslationsFromIDB();
+    setSavedTranslations(updatedIDB);
+    setShowFeedbackSuccess(true);
+    setTimeout(() => setShowFeedbackSuccess(false), 3000);
+
+    if (user && navigator.onLine) {
       try {
         const docData: any = {
           userId: user.uid,
@@ -601,36 +625,21 @@ export default function App() {
           docData.feedback = feedback;
         }
         await addDoc(collection(db, `users/${user.uid}/savedTranslations`), docData);
-        setShowFeedbackSuccess(true);
-        setTimeout(() => setShowFeedbackSuccess(false), 3000);
       } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}/savedTranslations`);
+        console.warn("Saved to IndexedDB offline; Firestore sync deferred:", error);
       }
-    } else {
-      // Fallback for unauthenticated users
-      const newEntry = {
-        id: Math.random().toString(36).substr(2, 9),
-        source,
-        target,
-        direction,
-        feedback,
-        timestamp: Date.now()
-      };
-      setSavedTranslations(prev => [newEntry, ...prev]);
-      setShowFeedbackSuccess(true);
-      setTimeout(() => setShowFeedbackSuccess(false), 3000);
     }
   };
 
   const deleteSavedTranslation = async (id: string) => {
-    if (user) {
+    await deleteTranslationFromIDB(id);
+    setSavedTranslations(prev => prev.filter(t => t.id !== id));
+    if (user && navigator.onLine && !id.startsWith('local_') && !id.startsWith('auto_')) {
       try {
         await deleteDoc(doc(db, `users/${user.uid}/savedTranslations`, id));
       } catch (error) {
         handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/savedTranslations/${id}`);
       }
-    } else {
-      setSavedTranslations(prev => prev.filter(t => t.id !== id));
     }
   };
 
@@ -931,6 +940,8 @@ export default function App() {
 
       const result = await getDailyExecutiveBriefing(briefingCount, userLoc);
       setBriefingResult(result);
+      const updatedBriefings = await getAllBriefingsFromIDB();
+      setCachedBriefings(updatedBriefings);
     } catch (error) {
       console.error("Error fetching briefing:", error);
       setBriefingResult("ขออภัยครับ ไม่สามารถดึงข้อมูลสรุปประจำวันได้ในขณะนี้");
@@ -973,6 +984,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#050505] text-zinc-100 font-sans selection:bg-gold-500/30">
+      <OfflineIndicator />
       <audio ref={audioRef} className="hidden" src={audioUrl || null} />
       <header className="glass-panel sticky top-0 z-50 px-6 py-4 flex items-center justify-between border-b border-white/5">
         <div className="flex items-center gap-4">
@@ -991,16 +1003,7 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-4">
-          {!hasApiKey && (
-            <button 
-              onClick={openApiKeyDialog}
-              className="hidden md:flex px-3 py-1.5 rounded-lg text-xs font-bold bg-gold-500/10 text-gold-400 border border-gold-500/20 hover:bg-gold-500 hover:text-white transition-all items-center gap-2"
-            >
-              <span className="w-2 h-2 rounded-full bg-gold-500 animate-pulse" />
-              Set API Key
-            </button>
-          )}
-          
+          <PWAInstallButton />
           {user ? (
             <div className="flex items-center gap-3 bg-white/5 pl-2 pr-4 py-1.5 rounded-xl border border-white/10">
               <img src={user.photoURL || `https://ui-avatars.com/api/?name=${user.email}`} alt="User" className="w-6 h-6 rounded-full" />
@@ -1151,6 +1154,56 @@ export default function App() {
                   <div className="prose prose-invert prose-zinc max-w-none prose-h1:text-gold-100 prose-h2:text-gold-200 prose-h3:text-gold-300 prose-strong:text-gold-400 prose-p:text-zinc-400 prose-p:leading-relaxed prose-a:text-gold-400 hover:prose-a:text-gold-300">
                     <ReactMarkdown components={markdownComponents}>{briefingResult}</ReactMarkdown>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {cachedBriefings.length > 0 && (
+              <div className="glass-panel rounded-[2rem] p-8 border border-white/10">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-lg font-bold font-serif italic text-gold-200">
+                      {lang === 'TH' ? 'คลังบทวิเคราะห์ออฟไลน์ (Offline Cached Briefings)' : 'Offline Cached Briefings (IndexedDB)'}
+                    </h3>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      {lang === 'TH' ? 'เข้าถึงบทสรุปผู้บริหารที่บันทึกไว้ได้ทันทีแม้ไม่มีอินเทอร์เน็ต' : 'Access saved executive briefings anytime, even without an internet connection.'}
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    {cachedBriefings.length} Saved
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {cachedBriefings.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => setBriefingResult(item.content)}
+                      className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-gold-500/40 cursor-pointer transition-all group relative"
+                    >
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          await deleteBriefingFromIDB(item.id);
+                          setCachedBriefings(await getAllBriefingsFromIDB());
+                        }}
+                        className="absolute top-3 right-3 p-1.5 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                        title="Delete cached briefing"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-gold-500/15 text-gold-400">
+                          Top {item.count} Issues
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          {new Date(item.timestamp).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-xs text-zinc-400 line-clamp-2 font-light">
+                        {item.content.replace(/[#*`]/g, '').slice(0, 140)}...
+                      </p>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

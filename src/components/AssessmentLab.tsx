@@ -21,12 +21,9 @@ import {
   Globe,
   Lock
 } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
 import { auth, db } from '../firebase';
 import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../utils/firestoreError';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 interface EvaluationTask {
   prompt: string;
