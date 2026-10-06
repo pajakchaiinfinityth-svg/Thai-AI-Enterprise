@@ -9,8 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit",
-    "start": "node server.js"
+    "lint": "tsc --noEmit"
   },
   "keywords": [
     "webmcp",
