@@ -470,12 +470,12 @@ export default function App() {
           timestamp: data.createdAt?.toMillis() || Date.now()
         });
       });
-      await bulkSyncTranslationsToIDB(translations);
-      const mergedFromIDB = await getAllTranslationsFromIDB();
+      await bulkSyncTranslationsToIDB(translations, user.uid);
+      const mergedFromIDB = await getAllTranslationsFromIDB(user.uid);
       setSavedTranslations(mergedFromIDB.length > 0 ? mergedFromIDB : translations);
     }, async (error) => {
       console.error("Error fetching translations:", error);
-      const fallback = await getAllTranslationsFromIDB();
+      const fallback = await getAllTranslationsFromIDB(user.uid);
       if (fallback.length > 0) {
         setSavedTranslations(fallback);
       }
@@ -602,12 +602,13 @@ export default function App() {
       target,
       direction,
       feedback,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      userId: user?.uid
     };
 
     // Always persist immediately to IndexedDB so Learning Log works offline
     await saveTranslationToIDB(localEntry);
-    const updatedIDB = await getAllTranslationsFromIDB();
+    const updatedIDB = await getAllTranslationsFromIDB(user?.uid ?? null);
     setSavedTranslations(updatedIDB);
     setShowFeedbackSuccess(true);
     setTimeout(() => setShowFeedbackSuccess(false), 3000);

@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type RequestHandler } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Modality, ThinkingLevel, GenerateVideosOperation } from '@google/genai';
@@ -50,11 +50,41 @@ async function retryWithBackoff<T>(
   }
 }
 
-async function startServer() {
+const ALLOWED_MODELS = /^(gemini|veo)-[\w.-]+$/;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_PER_MINUTE) || 60;
+const hits = new Map<string, { count: number; resetAt: number }>();
+
+const rateLimit: RequestHandler = (req, res, next) => {
+  const now = Date.now();
+  const key = req.ip || 'unknown';
+  const entry = hits.get(key);
+  if (!entry || entry.resetAt <= now) {
+    hits.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return next();
+  }
+  if (++entry.count > RATE_LIMIT_MAX) {
+    res.status(429).json({ error: { code: 429, message: 'Too many requests' } });
+    return;
+  }
+  next();
+};
+
+const validateModel: RequestHandler = (req, res, next) => {
+  const model = req.body?.model;
+  if (typeof model !== 'string' || !ALLOWED_MODELS.test(model)) {
+    res.status(400).json({ error: { code: 400, message: 'Unsupported model' } });
+    return;
+  }
+  next();
+};
+
+export function createApp() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '50mb' }));
+  app.use('/api', rateLimit);
+  app.use('/api/gemini', validateModel);
 
   // Unary content generation
   app.post('/api/gemini/generate', async (req, res) => {
@@ -224,6 +254,13 @@ async function startServer() {
     }
   });
 
+  return app;
+}
+
+async function startServer() {
+  const app = createApp();
+  const PORT = Number(process.env.PORT) || 3000;
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -244,4 +281,6 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}

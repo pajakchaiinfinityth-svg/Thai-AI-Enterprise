@@ -14,6 +14,7 @@ export interface CachedTranslationItem {
   feedback: 'good' | 'bad' | null;
   timestamp: number;
   synced?: boolean;
+  userId?: string;
 }
 
 const DB_NAME = 'gem_y_offline_db';
@@ -137,17 +138,34 @@ export async function saveTranslationToIDB(
   }
 }
 
+const translationKey = (i: CachedTranslationItem) => `${i.direction}\u0000${i.source}\u0000${i.target}`;
+
+// Stores Firestore items for a user and drops that user's local_ duplicates of them.
 export async function bulkSyncTranslationsToIDB(
-  items: CachedTranslationItem[]
+  items: CachedTranslationItem[],
+  userId: string
 ): Promise<void> {
   try {
     const db = await openDB();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
       const store = tx.objectStore(STORE_TRANSLATIONS);
-      for (const item of items) {
-        store.put({ ...item, synced: true });
-      }
+      const remoteKeys = new Set(items.map(translationKey));
+      const getReq = store.getAll();
+      getReq.onsuccess = () => {
+        for (const existing of (getReq.result as CachedTranslationItem[]) || []) {
+          if (
+            existing.userId === userId &&
+            existing.id.startsWith('local_') &&
+            remoteKeys.has(translationKey(existing))
+          ) {
+            store.delete(existing.id);
+          }
+        }
+        for (const item of items) {
+          store.put({ ...item, synced: true, userId });
+        }
+      };
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -156,7 +174,10 @@ export async function bulkSyncTranslationsToIDB(
   }
 }
 
-export async function getAllTranslationsFromIDB(): Promise<CachedTranslationItem[]> {
+// Returns only entries owned by userId (or guest entries when userId is null).
+export async function getAllTranslationsFromIDB(
+  userId: string | null = null
+): Promise<CachedTranslationItem[]> {
   try {
     const db = await openDB();
     return await new Promise((resolve, reject) => {
@@ -164,7 +185,9 @@ export async function getAllTranslationsFromIDB(): Promise<CachedTranslationItem
       const store = tx.objectStore(STORE_TRANSLATIONS);
       const req = store.getAll();
       req.onsuccess = () => {
-        const items = (req.result as CachedTranslationItem[]) || [];
+        const items = ((req.result as CachedTranslationItem[]) || []).filter(
+          (item) => (item.userId ?? null) === userId
+        );
         items.sort((a, b) => b.timestamp - a.timestamp);
         resolve(items);
       };
