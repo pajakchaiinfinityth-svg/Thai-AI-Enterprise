@@ -798,7 +798,9 @@ export async function generateVideoFromImage(
 
     const { operationName } = startData;
 
-    while (true) {
+    const MAX_POLL_ATTEMPTS = 60;
+    let done = false;
+    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS && !done; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 10000));
       const statusRes = await fetch('/api/video-status', {
         method: 'POST',
@@ -806,9 +808,15 @@ export async function generateVideoFromImage(
         body: JSON.stringify({ operationName }),
       });
       const statusData = await statusRes.json();
-      if (statusData.done) {
-        break;
+      if (!statusRes.ok || statusData.error) {
+        const err: any = new Error(statusData.error?.message || 'Failed to poll video status');
+        err.status = statusData.error?.code || statusRes.status;
+        throw err;
       }
+      done = Boolean(statusData.done);
+    }
+    if (!done) {
+      throw new Error('Video generation timed out');
     }
 
     const downloadRes = await fetch('/api/video-download', {
